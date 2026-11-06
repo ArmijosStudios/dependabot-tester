@@ -109,8 +109,10 @@ def wait(repos, wait_timeout, settle, poll, graphql=gh.graphql, clock=time.monot
             return snap, "done"
         if now - start >= wait_timeout:
             return snap, "timeout"
-        print(f"[{int(now - start)}s] {done}/{len(repos)} repos have alert + security update outcome",
-              file=sys.stderr)
+        detail = ", ".join(f"{r.split('/')[-1]}: {len(s['alerts'])} alerts {len(s['prs'])} PRs"
+                           for r, s in list(snap.items())[:10])
+        print(f"[{int(now - start)}s] {done}/{len(repos)} repos have alert + security update outcome ({detail})",
+              file=sys.stderr, flush=True)
         sleep(poll)
 
 

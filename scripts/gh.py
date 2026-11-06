@@ -37,15 +37,23 @@ def api(path, method="GET", body=None, raw=False, paginate=False, retries=5, wai
         raise GhError(f"{method} {path}: {err[:500]}")
 
 
+_seen_errors = set()
+
+
 def graphql(query, **variables):
     cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
     for k, v in variables.items():
         cmd += ["-F" if isinstance(v, int) else "-f", f"{k}={v}"]
     p = subprocess.run(cmd, capture_output=True, text=True)
     try:
-        data = json.loads(p.stdout).get("data")
+        doc = json.loads(p.stdout)
     except ValueError:
-        data = None
+        doc = {}
+    data = doc.get("data")
+    for msg in sorted({e.get("message", str(e)) for e in doc.get("errors") or []}):
+        if msg not in _seen_errors:
+            _seen_errors.add(msg)
+            print(f"graphql error: {msg}", file=sys.stderr)
     if data is None:
         raise GhError(f"graphql: {(p.stderr + p.stdout).strip()[:500]}")
     return data
