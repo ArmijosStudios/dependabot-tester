@@ -15,6 +15,7 @@ import sys
 from stacks import MAX_REPOS_PER_STACK, STACKS
 
 NO_RESPONSE = "_No response_"
+REGISTRY_URL = re.compile(r"https?://[^\s\"'<>`]+")
 
 
 def sections(body):
@@ -61,7 +62,11 @@ def parse(body):
 
     per_stack = key_values(s.get("concurrency per stack", ""))
     deps = key_values(s.get("dependency per stack", ""))
-    extra = sorted(set(per_stack) - set(selected)) + sorted(set(deps) - set(selected))
+    registries = {k: v.rstrip("/") for k, v in key_values(s.get("registry per stack", "")).items()}
+    for stack, url in registries.items():
+        if not REGISTRY_URL.fullmatch(url):
+            raise ValueError(f"Registry for `{stack}` must be an http(s) URL, got `{url}`.")
+    extra = sorted((set(per_stack) | set(deps) | set(registries)) - set(selected))
     unknown = [x for x in extra if x not in STACKS]
     if unknown:
         raise ValueError(f"Unknown tech stack(s): {', '.join(unknown)}.")
@@ -79,6 +84,7 @@ def parse(body):
             "requested": int(raw),
             "count": count,
             "dependency": deps.get(stack),
+            "registry": registries.get(stack),
             "advisory": None,
         })
     return limit, matrix

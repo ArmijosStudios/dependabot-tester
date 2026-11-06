@@ -73,6 +73,7 @@ jobs:
           STACK: ${{ matrix.stack }}
           COUNT: ${{ matrix.count }}
           DEP: ${{ matrix.dependency }}
+          REGISTRY: ${{ matrix.registry }}
           ADVISORY: ${{ toJSON(matrix.advisory) }}
           ORG: ${{ github.repository_owner }}
           ISSUE: ${{ github.event.issue.number }}
@@ -80,7 +81,7 @@ jobs:
         run: |
           mkdir -p out
           python3 scripts/provision.py "$STACK" "$COUNT" "$DEP" --org "$ORG" --issue "$ISSUE" \
-            --issue-url "$ISSUE_URL" --advisory "$ADVISORY" --report "out/$STACK.json"
+            --issue-url "$ISSUE_URL" --advisory "$ADVISORY" --registry "$REGISTRY" --report "out/$STACK.json"
       - if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -115,8 +116,8 @@ jobs:
               r = json.load(open(p)); reports[r["stack"]] = r
           created = sum(r["created"] for r in reports.values())
           print(f"**Concurrency limit:** {os.environ['LIMIT']}\n")
-          print("| Stack | Requested | Applied | Dependency | Advisory | Repos created | Lockfile |")
-          print("|---|---|---|---|---|---|---|")
+          print("| Stack | Requested | Applied | Dependency | Registry | Advisory | Repos created | Lockfile |")
+          print("|---|---|---|---|---|---|---|---|")
           for m in json.loads(os.environ["MATRIX"]):
               r = reports.get(m["stack"])
               made = f"{r['created']}/{m['count']}" if r else "job failed"
@@ -124,7 +125,7 @@ jobs:
               a = m.get("advisory")
               adv = (f"[{a['ghsa']}]({a['url']}) {a['severity']}, vulnerable `{a['vulnerable_range']}`, fixed in `{a['patched']}`"
                      if a else "– (from issue)")
-              print(f"| {m['stack']} | {m['requested']} | {m['count']} | `{m['dependency']}` | {adv} | {made} | {', '.join(locks) or '–'} |")
+              print(f"| {m['stack']} | {m['requested']} | {m['count']} | `{m['dependency']}` | {f"`{m['registry']}`" if m.get("registry") else "public"} | {adv} | {made} | {', '.join(locks) or '–'} |")
           names = [f"[{x['name']}]({x['url']})" for r in reports.values() for x in r["repos"] if not x["error"]]
           if names:
               print("\n<details><summary>Repos</summary>\n\n" + ", ".join(names) + "\n\n</details>")

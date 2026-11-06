@@ -51,3 +51,18 @@ body:
         node=lodash@4.17.20
     validations:
       required: false
+  - type: textarea
+    id: registry-per-stack
+    attributes:
+      label: Registry per stack
+      description: |
+        Optional `stack=URL` per line. The stack's repos resolve packages from that registry and
+        Dependabot is configured to use it (`registries:` in `dependabot.yml`). Stacks left out use the
+        public registry. The registry must be reachable without credentials.
+      placeholder: |
+        python=https://pypi.example.com/simple
+        node=https://npm.example.com
+        ruby=https://gems.example.com
+        go=https://goproxy.example.com
+    validations:
+      required: false

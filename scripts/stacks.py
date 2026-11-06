@@ -3,10 +3,14 @@
 import re
 
 STACKS = {
-    "python": {"ecosystem": "pip", "advisory_ecosystem": "pip", "file": "requirements.txt"},
-    "node": {"ecosystem": "npm", "advisory_ecosystem": "npm", "file": "package.json"},
-    "ruby": {"ecosystem": "bundler", "advisory_ecosystem": "rubygems", "file": "Gemfile"},
-    "go": {"ecosystem": "gomod", "advisory_ecosystem": "go", "file": "go.mod"},
+    "python": {"ecosystem": "pip", "advisory_ecosystem": "pip", "file": "requirements.txt",
+               "registry_type": "python-index"},
+    "node": {"ecosystem": "npm", "advisory_ecosystem": "npm", "file": "package.json",
+             "registry_type": "npm-registry"},
+    "ruby": {"ecosystem": "bundler", "advisory_ecosystem": "rubygems", "file": "Gemfile",
+             "registry_type": "rubygems-server"},
+    "go": {"ecosystem": "gomod", "advisory_ecosystem": "go", "file": "go.mod",
+           "registry_type": "goproxy-server"},
 }
 
 MAX_REPOS_PER_STACK = 200

@@ -40,13 +40,14 @@ def next_names(stack, count, existing):
     return [repo_name(stack, i) for i in range(start, start + count)]
 
 
-def build_files(stack, repo, spec, org, issue_url, make_lockfiles=True):
+def build_files(stack, repo, spec, org, issue_url, make_lockfiles=True, registry=None):
     files = {
-        STACKS[stack]["file"]: manifests.package_file(stack, repo, spec, org),
-        ".github/dependabot.yml": manifests.dependabot_yml(stack),
-        "README.md": manifests.readme(repo, stack, spec, issue_url),
+        STACKS[stack]["file"]: manifests.package_file(stack, repo, spec, org, registry),
+        ".github/dependabot.yml": manifests.dependabot_yml(stack, registry),
+        "README.md": manifests.readme(repo, stack, spec, issue_url, registry),
+        **manifests.registry_files(stack, registry),
     }
-    locks = manifests.lockfiles(stack, files, spec) if make_lockfiles else {}
+    locks = manifests.lockfiles(stack, files, spec, registry=registry) if make_lockfiles else {}
     files.update(locks)
     lockfile = next((p for p in locks if p != STACKS[stack]["file"]), None)
     return files, lockfile
@@ -75,9 +76,9 @@ def push(org, repo, files, message):
         return git("rev-parse", "HEAD")
 
 
-def provision_one(org, stack, repo, spec, issue, issue_url, make_lockfiles=True):
+def provision_one(org, stack, repo, spec, issue, issue_url, make_lockfiles=True, registry=None):
     r = {"repo": f"{org}/{repo}", "name": repo, "url": f"https://github.com/{org}/{repo}",
-         "stack": stack, "dependency": spec, "lockfile": None, "error": None}
+         "stack": stack, "dependency": spec, "registry": registry, "lockfile": None, "error": None}
     try:
         created = gh.api(f"orgs/{org}/repos", "POST", {
             "name": repo, "private": True, "auto_init": False,
@@ -86,7 +87,7 @@ def provision_one(org, stack, repo, spec, issue, issue_url, make_lockfiles=True)
         })
         r["created_at"] = created["created_at"]
         gh.api(f"repos/{org}/{repo}/topics", "PUT", {"names": [TOPIC, stack, f"issue-{issue}"]})
-        files, r["lockfile"] = build_files(stack, repo, spec, org, issue_url, make_lockfiles)
+        files, r["lockfile"] = build_files(stack, repo, spec, org, issue_url, make_lockfiles, registry)
         r["files"] = sorted(files)
         r["sha"] = push(org, repo, files, f"Add {spec} and Dependabot config (#{issue})")
         r["pushed_at"] = now()
@@ -99,14 +100,14 @@ def provision_one(org, stack, repo, spec, issue, issue_url, make_lockfiles=True)
     return r
 
 
-def run(org, stack, count, spec, issue, issue_url, existing=None, make_lockfiles=True):
+def run(org, stack, count, spec, issue, issue_url, existing=None, make_lockfiles=True, registry=None):
     existing = org_repo_names(org) if existing is None else existing
     repos = []
     for name in next_names(stack, count, existing):
-        r = provision_one(org, stack, name, spec, issue, issue_url, make_lockfiles)
+        r = provision_one(org, stack, name, spec, issue, issue_url, make_lockfiles, registry)
         print(f"{r['repo']}: {r['error'] or 'ok'}", file=sys.stderr)
         repos.append(r)
-    return {"stack": stack, "dependency": spec, "requested": count,
+    return {"stack": stack, "dependency": spec, "registry": registry, "requested": count,
             "created": sum(r["error"] is None for r in repos), "repos": repos}
 
 
@@ -119,10 +120,12 @@ def main():
     ap.add_argument("--issue", default="0")
     ap.add_argument("--issue-url", default="")
     ap.add_argument("--advisory", default="null", help="advisory JSON from the parse step")
+    ap.add_argument("--registry", default="", help="custom registry URL (blank = public registry)")
     ap.add_argument("--report")
     args = ap.parse_args()
 
-    report = run(args.org, args.stack, args.count, args.dependency.strip(), args.issue, args.issue_url)
+    report = run(args.org, args.stack, args.count, args.dependency.strip(), args.issue, args.issue_url,
+                 registry=args.registry.strip() or None)
     report["advisory"] = json.loads(args.advisory or "null")
     print(json.dumps(report, indent=2))
     if args.report:

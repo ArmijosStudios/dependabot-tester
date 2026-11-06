@@ -26,6 +26,7 @@ This is the repo-per-package version of
 | Concurrency limit | `10` | Caps every stack's count, and is the matrix `max-parallel` (stack jobs running at once). |
 | Tech stacks | `[x] python` `[x] node` | Stacks to create repos for. |
 | Concurrency per stack | `python=10`<br>`node=5` | How many repos to create per stack (up to 200). Missing stacks default to the limit. |
+| Registry per stack (optional) | `python=https://pypi.example.com/simple`<br>`node=https://npm.example.com` | Registry URL per stack. Stacks left out use the public registry. See below. |
 | Dependency per stack (optional) | `python=requests==2.19.1`<br>`node=lodash@4.17.20` | `name@version` for all stacks; Python also accepts pip specifiers. Stacks left out get a vulnerable package (below). |
 
 Example: limit `10`, `python=3`, `node=20` creates `python-01..python-03` and `node-01..node-10`.
@@ -40,6 +41,16 @@ alert or closed PR for its dependency.
 package that has a `first_patched_version` and a stable release inside the vulnerable range. The
 highest such release is pinned and the issue comment links the GHSA. Try it locally with
 `python3 scripts/pick_vulnerable.py python`.
+
+### Custom registry
+
+With `stack=URL` set, that stack's repos get the registry in the package manager config
+(`--index-url` in `requirements.txt`, `.npmrc`, the Gemfile `source`, `GOPROXY` for `go get`) and a
+`registries:` entry in `dependabot.yml` (`python-index`, `npm-registry`, `rubygems-server`,
+`goproxy-server`) that the update uses (`replaces-base: true` except for Go). Lockfiles are generated
+against it too. The registry must allow anonymous reads; no credentials are configured. Registry
+download latency in the metrics report is broken down by host, so the custom registry shows up there.
+The advisory picker still reads versions from the public registry.
 
 ## What each repo gets
 

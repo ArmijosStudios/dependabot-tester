@@ -55,6 +55,16 @@ class ParseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse_issue.parse(body)
 
+    def test_registry_per_stack(self):
+        body = BODY + "\n### Registry per stack\n\npython=https://pypi.example.com/simple/\n"
+        by = {m["stack"]: m for m in parse_issue.parse(body)[1]}
+        self.assertEqual(by["python"]["registry"], "https://pypi.example.com/simple")
+        self.assertIsNone(by["go"]["registry"])
+        self.assertIsNone({m["stack"]: m for m in parse_issue.parse(BODY)[1]}["python"]["registry"])
+        for bad in ("python=pypi.example.com", 'python=https://x" y', "rust=https://crates.example.com"):
+            with self.assertRaises(ValueError):
+                parse_issue.parse(BODY + f"\n### Registry per stack\n\n{bad}\n")
+
     def test_resolve_only_fills_blanks(self):
         matrix = [{"stack": "python", "dependency": None, "advisory": None},
                   {"stack": "node", "dependency": "x@1", "advisory": None}]
@@ -99,6 +109,24 @@ class ManifestTests(unittest.TestCase):
             self.assertIn(f'package-ecosystem: "{cfg["ecosystem"]}"', text)
             self.assertIn('directory: "/"', text)
             self.assertEqual(text.count("package-ecosystem"), 1)
+
+    def test_registry_config(self):
+        self.assertNotIn("registries", manifests.dependabot_yml("python"))
+        for stack, cfg in stacks.STACKS.items():
+            text = manifests.dependabot_yml(stack, "https://r.example.com/x")
+            self.assertTrue(text.startswith(f"version: 2\nregistries:\n  {stack}:\n    type: {cfg['registry_type']}\n"
+                                            '    url: "https://r.example.com/x"\n'))
+            self.assertEqual("replaces-base: true" in text, stack != "go")
+            self.assertIn(f'directory: "/"\n    registries:\n      - {stack}\n', text)
+        url = "https://r.example.com"
+        self.assertEqual(manifests.package_file("python", "p", "x==1", registry=url), f"--index-url {url}\nx==1\n")
+        self.assertTrue(manifests.package_file("ruby", "r", "rack@2.0.0", registry=url).startswith(f'source "{url}"'))
+        self.assertEqual(manifests.registry_files("node", url), {".npmrc": f"registry={url}/\n"})
+        self.assertEqual(manifests.registry_files("node", None), {})
+        files, _ = provision.build_files("node", "node-01", "lodash@4.17.20", "Org", "u", make_lockfiles=False,
+                                         registry=url)
+        self.assertIn(".npmrc", files)
+        self.assertIn(url, files["README.md"])
 
     def test_python_needs_no_lockfile(self):
         self.assertEqual(manifests.lockfiles("python", {"requirements.txt": "x==1\n"}, "x==1"), {})
