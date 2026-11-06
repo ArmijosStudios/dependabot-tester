@@ -91,7 +91,8 @@ def snapshot(repos, graphql=gh.graphql):
 
 def repo_settled(state):
     alerts = state["alerts"]
-    return bool(alerts) and all((a.get("dependabotUpdate") or {}).get("pullRequest")
+    return bool(alerts) and all(a.get("state") != "OPEN"
+                                or (a.get("dependabotUpdate") or {}).get("pullRequest")
                                 or (a.get("dependabotUpdate") or {}).get("error") for a in alerts)
 
 
