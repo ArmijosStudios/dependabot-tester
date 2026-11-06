@@ -64,6 +64,7 @@ def dependabot_yml(stack):
         '    directory: "/"\n'
         "    schedule:\n"
         '      interval: "weekly"\n'
+        "    open-pull-requests-limit: 0\n"
         "    groups:\n"
         f"      {stack}:\n"
         "        patterns:\n"

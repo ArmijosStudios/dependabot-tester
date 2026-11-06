@@ -47,7 +47,7 @@ highest such release is pinned and the issue comment links the GHSA. Try it loca
 |---|---|
 | `requirements.txt` / `package.json` / `Gemfile` / `go.mod` | Just the vulnerable dependency |
 | Lockfile, when it can be generated | `package-lock.json` (`npm install --package-lock-only`), `Gemfile.lock` (`bundle lock`), `go.sum` (`go get`). Best effort: if resolution fails the repo is pushed without one, and the comment shows which repos have one. Python gets none. |
-| `.github/dependabot.yml` | One `/` entry for the stack's ecosystem, weekly, all updates grouped |
+| `.github/dependabot.yml` | One `/` entry for the stack's ecosystem, weekly, `open-pull-requests-limit: 0` so only security update PRs open (a grouped version-update PR would otherwise bump the package first and pre-empt the security PR) |
 | `README.md` | Points back to the issue |
 
 The repo is private, gets topics `issue-repo-dependency-updater`, `<stack>` and `issue-<N>`, and
