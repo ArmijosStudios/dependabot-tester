@@ -1,0 +1,150 @@
+name: Repo dependency rollout
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: repo-rollout
+  cancel-in-progress: false
+
+jobs:
+  parse:
+    if: contains(github.event.issue.labels.*.name, 'repo-rollout')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.parse.outputs.matrix }}
+      max_parallel: ${{ steps.parse.outputs.max_parallel }}
+      limit: ${{ steps.parse.outputs.limit }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check ORG_REPO_TOKEN
+        env:
+          ORG_REPO_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+        run: |
+          if [ -z "$ORG_REPO_TOKEN" ]; then
+            echo "The ORG_REPO_TOKEN Actions secret is not set; it needs to create and administer repos in ${{ github.repository_owner }} (see README)." > parse-error.txt
+            exit 1
+          fi
+      - id: parse
+        name: Extract fields from issue
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/parse_issue.py
+      - name: Report parse error
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          msg="Could not run the rollout: $(cat parse-error.txt 2>/dev/null || echo 'see workflow logs')"
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" \
+            --body "$msg"$'\n\n'"[Workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+
+  provision:
+    needs: parse
+    runs-on: ubuntu-latest
+    name: provision (${{ matrix.stack }} x${{ matrix.count }})
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.parse.outputs.max_parallel) }}
+      matrix:
+        include: ${{ fromJSON(needs.parse.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+      - if: matrix.stack == 'go'
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - if: matrix.stack == 'ruby'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Create ${{ matrix.count }} ${{ matrix.stack }} repos with ${{ matrix.dependency }}
+        env:
+          GH_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+          STACK: ${{ matrix.stack }}
+          COUNT: ${{ matrix.count }}
+          DEP: ${{ matrix.dependency }}
+          ADVISORY: ${{ toJSON(matrix.advisory) }}
+          ORG: ${{ github.repository_owner }}
+          ISSUE: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+        run: |
+          mkdir -p out
+          python3 scripts/provision.py "$STACK" "$COUNT" "$DEP" --org "$ORG" --issue "$ISSUE" \
+            --issue-url "$ISSUE_URL" --advisory "$ADVISORY" --report "out/$STACK.json"
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: rollout-${{ matrix.stack }}
+          path: out/
+          if-no-files-found: ignore
+
+  comment:
+    needs: [parse, provision]
+    if: always() && needs.parse.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: rollout-*
+          path: out
+          merge-multiple: true
+      - name: Comment created repos
+        id: comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          LIMIT: ${{ needs.parse.outputs.limit }}
+          MATRIX: ${{ needs.parse.outputs.matrix }}
+        run: |
+          python3 - > comment.md <<'PY'
+          import glob, json, os
+          server, repo, run = os.environ["GITHUB_SERVER_URL"], os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
+          reports = {}
+          for p in glob.glob("out/*.json"):
+              r = json.load(open(p)); reports[r["stack"]] = r
+          created = sum(r["created"] for r in reports.values())
+          print(f"**Concurrency limit:** {os.environ['LIMIT']}\n")
+          print("| Stack | Requested | Applied | Dependency | Advisory | Repos created | Lockfile |")
+          print("|---|---|---|---|---|---|---|")
+          for m in json.loads(os.environ["MATRIX"]):
+              r = reports.get(m["stack"])
+              made = f"{r['created']}/{m['count']}" if r else "job failed"
+              locks = sorted({x["lockfile"] for x in r["repos"] if x.get("lockfile")}) if r else []
+              a = m.get("advisory")
+              adv = (f"[{a['ghsa']}]({a['url']}) {a['severity']}, vulnerable `{a['vulnerable_range']}`, fixed in `{a['patched']}`"
+                     if a else "– (from issue)")
+              print(f"| {m['stack']} | {m['requested']} | {m['count']} | `{m['dependency']}` | {adv} | {made} | {', '.join(locks) or '–'} |")
+          names = [f"[{x['name']}]({x['url']})" for r in reports.values() for x in r["repos"] if not x["error"]]
+          if names:
+              print("\n<details><summary>Repos</summary>\n\n" + ", ".join(names) + "\n\n</details>")
+          errors = [f"- `{x['repo']}`: {x['error']}" for r in reports.values() for x in r["repos"] if x["error"]]
+          if errors:
+              print("\n**Failed:**\n" + "\n".join(errors))
+          if created:
+              print("\nDependabot metrics (time to alert / security job / PR, queue and execution duration, "
+                    "failure rate, registry latency) will be posted here once Dependabot finishes.")
+          print(f"\n[Workflow run]({server}/{repo}/actions/runs/{run})")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"created={created}\n")
+          PY
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+      - name: Queue Dependabot metrics
+        if: steps.comment.outputs.created != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh workflow run dependabot-metrics.yml --repo "$GITHUB_REPOSITORY" \
+            --ref "${{ github.event.repository.default_branch }}" -f issue="$ISSUE" -f run_id="$GITHUB_RUN_ID"

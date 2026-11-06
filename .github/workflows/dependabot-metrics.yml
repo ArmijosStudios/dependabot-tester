@@ -1,0 +1,68 @@
+name: Dependabot metrics
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to post the metrics on
+        required: true
+      run_id:
+        description: Repo dependency rollout run whose rollout-* artifacts list the repos
+        required: true
+      wait_timeout:
+        description: Max seconds to wait for every repo's alert and security update outcome
+        default: "3600"
+      settle:
+        description: Seconds with no change before reporting
+        default: "180"
+      close_issue:
+        description: Close the issue after posting
+        type: boolean
+        default: true
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  metrics:
+    name: metrics (#${{ inputs.issue }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: rollout-*
+          path: out
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Wait for Dependabot and build report
+        env:
+          GH_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+          WAIT_TIMEOUT: ${{ inputs.wait_timeout }}
+          SETTLE: ${{ inputs.settle }}
+        run: |
+          python3 scripts/repo_metrics.py out/*.json --wait-timeout "$WAIT_TIMEOUT" --settle "$SETTLE" \
+            --json out/metrics.json --full full.md > report.md
+          footer=$'\n'"[Metrics run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          echo "$footer" >> report.md
+          cat full.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dependabot-metrics
+          path: |
+            out/metrics.json
+            full.md
+      - name: Post report on issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+          CLOSE: ${{ inputs.close_issue }}
+        run: |
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file report.md
+          if [ "$CLOSE" = "true" ]; then
+            gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" --reason completed
+          fi

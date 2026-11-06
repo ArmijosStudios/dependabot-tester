@@ -1,0 +1,38 @@
+name: Delete generated repos
+
+on:
+  workflow_dispatch:
+    inputs:
+      stacks:
+        description: Comma-separated stacks (blank = all)
+        default: ""
+      issue:
+        description: Only repos created by this issue number (blank = any)
+        default: ""
+      confirm:
+        description: Type `delete` to delete; anything else is a dry run
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repo-rollout
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Delete repos
+        env:
+          GH_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+          STACKS: ${{ inputs.stacks }}
+          ISSUE: ${{ inputs.issue }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          flag=--dry-run
+          [ "$CONFIRM" = "delete" ] && flag=
+          python3 scripts/cleanup.py --org "$ORG" --stacks "$STACKS" --issue "$ISSUE" $flag | tee -a "$GITHUB_STEP_SUMMARY"

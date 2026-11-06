@@ -1,0 +1,53 @@
+name: Repo dependency rollout
+description: Create N repos per tech stack, each with a vulnerable dependency and Dependabot enabled.
+title: "Repo dependency rollout"
+labels: ["repo-rollout"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submitting this issue runs the **Repo dependency rollout** workflow. For each selected stack it
+        creates N new repos in the organization named `<stack>-<NN>` (numbered after the ones that already
+        exist), pushes the package file with the dependency plus `.github/dependabot.yml`, enables Dependabot
+        alerts and security updates, then tracks Dependabot and posts the metrics here.
+  - type: input
+    id: concurrency-limit
+    attributes:
+      label: Concurrency limit
+      description: Upper bound for every stack's count, and the max number of stack jobs that run in parallel.
+      placeholder: "10"
+    validations:
+      required: true
+  - type: checkboxes
+    id: tech-stacks
+    attributes:
+      label: Tech stacks
+      description: Stacks to create repos for.
+      options:
+        - label: python
+        - label: node
+        - label: ruby
+        - label: go
+  - type: textarea
+    id: concurrency-per-stack
+    attributes:
+      label: Concurrency per stack
+      description: How many repos to create per stack (`stack=N`, one per line, up to 200). Missing stacks default to the concurrency limit.
+      placeholder: |
+        python=10
+        node=5
+    validations:
+      required: false
+  - type: textarea
+    id: dependency-per-stack
+    attributes:
+      label: Dependency per stack
+      description: |
+        Optional `stack=name@version` per line. Stacks left out get a package with a **critical or high**
+        GitHub advisory pinned to a vulnerable version that has a patched release, so Dependabot opens a
+        security PR for it.
+      placeholder: |
+        python=requests==2.19.1
+        node=lodash@4.17.20
+    validations:
+      required: false
