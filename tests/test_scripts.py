@@ -156,6 +156,7 @@ class ProvisionTests(unittest.TestCase):
             ("PUT", "repos/Org/python-01/automated-security-fixes")])
         self.assertNotIn("enable_before_push_error", r)
         self.assertTrue(calls[0][2]["private"])
+        self.assertTrue(calls[0][2]["auto_init"])
         self.assertEqual(calls[1][2]["names"], [stacks.TOPIC, "python", "issue-7"])
         files = push.call_args[0][2]
         self.assertEqual(sorted(files), [".github/dependabot.yml", "README.md", "requirements.txt"])
@@ -190,33 +191,101 @@ class ProvisionTests(unittest.TestCase):
         self.assertIn("422", r["enable_before_push_error"])
         self.assertIn("dependabot_enabled_at", r)
 
-    def test_nudge_only_repos_without_runs(self):
+    def test_touch(self):
+        stamp = "2026-01-01T00:00:00Z"
+        self.assertEqual(provision.touch("requirements.txt", "x==1\n", stamp), f"x==1\n# rerun requested {stamp}\n")
+        self.assertEqual(provision.touch("Gemfile", "gem 'a'", stamp), f"gem 'a'\n# rerun requested {stamp}\n")
+        self.assertTrue(provision.touch("go.mod", "module m\n", stamp).endswith(f"// rerun requested {stamp}\n"))
+        doc = json.loads(provision.touch("package.json", '{"dependencies": {"a": "1"}}', stamp))
+        self.assertEqual(doc, {"dependencies": {"a": "1"}, "description": f"rerun requested {stamp}"})
+
+    def test_nudge_commit_touches_package_file_and_config(self):
         import base64
-        calls, slept = [], []
+        calls = []
 
         def fake_api(path, method="GET", body=None, **kw):
             calls.append((method, path, body))
-            if "actions/runs" in path:
-                return {"total_count": 1 if "python-01" in path else 0}
-            if method == "GET":
-                return {"sha": "s1", "content": base64.b64encode(b"version: 2\n").decode()}
+            if path.endswith("git/ref/heads/main"):
+                return {"object": {"sha": "head"}}
+            if "/contents/" in path:
+                return {"content": base64.b64encode(b"x==1\n").decode()}
+            if path.endswith("git/commits/head"):
+                return {"tree": {"sha": "t0"}}
+            if path.endswith("git/trees"):
+                return {"sha": "t1"}
+            if path.endswith("git/commits"):
+                return {"sha": "c1"}
 
-        t0 = provision.parse_ts("2026-01-01T00:00:00Z")
-        repos = [{"name": "python-01", "repo": "Org/python-01", "error": None, "pushed_at": "2026-01-01T00:00:00Z"},
-                 {"name": "python-02", "repo": "Org/python-02", "error": None, "pushed_at": "2026-01-01T00:01:00Z"},
-                 {"name": "python-03", "repo": "Org/python-03", "error": "boom"}]
         with mock.patch.object(gh, "api", fake_api):
-            provision.nudge("Org", repos, 180, sleep=slept.append,
-                            clock=lambda: t0 + provision.dt.timedelta(seconds=100))
-        self.assertEqual(slept, [80, 140])
+            self.assertEqual(provision.nudge_commit("Org", "python-01", "python", "S"), "c1")
+        tree = next(c[2] for c in calls if c[1].endswith("git/trees"))
+        self.assertEqual(tree["base_tree"], "t0")
+        self.assertEqual([e["path"] for e in tree["tree"]], ["requirements.txt", ".github/dependabot.yml"])
+        self.assertTrue(all(e["content"] == "x==1\n# rerun requested S\n" for e in tree["tree"]))
+        self.assertEqual(next(c[2] for c in calls if c[1].endswith("git/commits") and c[0] == "POST")["parents"],
+                         ["head"])
+        self.assertEqual(calls[-1][:3], ("PATCH", "repos/Org/python-01/git/refs/heads/main", {"sha": "c1"}))
+
+    def watch(self, runs, attempts=3):
+        """Watch with a fake clock; `runs(name, nudges)` says whether the repo has a Dependabot run."""
+        t = [provision.parse_ts("2026-01-01T00:00:00Z")]
+        nudged = []
+
+        def has_run(org, name):
+            return runs(name, nudged.count(name))
+
+        w = provision.Watch("Org", 60, attempts, clock=lambda: t[0],
+                            sleep=lambda s: t.__setitem__(0, t[0] + provision.dt.timedelta(seconds=s)))
+        patches = [mock.patch.object(provision, "has_dependabot_run", has_run),
+                   mock.patch.object(provision, "nudge_commit", lambda org, name, stack, stamp: nudged.append(name))]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return w, t, nudged
+
+    @staticmethod
+    def pushed(name, at, error=None):
+        return {"name": name, "repo": f"Org/{name}", "stack": "python", "error": error, "pushed_at": at}
+
+    def test_watch_nudges_only_repos_without_runs(self):
+        w, t, nudged = self.watch(lambda name, n: name == "python-01" or n >= 1)
+        repos = [self.pushed("python-01", "2026-01-01T00:00:00Z"), self.pushed("python-02", "2026-01-01T00:00:10Z"),
+                 self.pushed("python-03", None, error="boom")]
+        for r in repos:
+            w.add(r)
+        w.poll()
+        self.assertEqual(nudged, [])
+        w.drain()
+        self.assertEqual(nudged, ["python-02"])
         self.assertNotIn("nudged_at", repos[0])
-        self.assertIn("nudged_at", repos[1])
-        put = [c for c in calls if c[0] == "PUT"]
-        self.assertEqual(len(put), 1)
-        self.assertEqual(put[0][1], "repos/Org/python-02/contents/.github/dependabot.yml")
-        self.assertEqual(put[0][2]["sha"], "s1")
-        text = base64.b64decode(put[0][2]["content"]).decode()
-        self.assertTrue(text.startswith("version: 2\n# rerun requested "))
+        self.assertEqual(repos[1]["nudges"], ["2026-01-01T00:01:10Z"])
+        self.assertEqual(repos[1]["nudged_at"], "2026-01-01T00:01:10Z")
+        self.assertEqual(w.pending, [])
+
+    def test_watch_retries_then_gives_up(self):
+        w, t, nudged = self.watch(lambda name, n: False, attempts=2)
+        r = self.pushed("python-01", "2026-01-01T00:00:00Z")
+        w.add(r)
+        w.drain()
+        self.assertEqual(nudged, ["python-01", "python-01"])
+        self.assertEqual(r["nudges"], ["2026-01-01T00:01:00Z", "2026-01-01T00:02:00Z"])
+        self.assertEqual(w.pending, [])
+
+    def test_run_nudges_while_provisioning(self):
+        w, t, nudged = self.watch(lambda name, n: n >= 1)
+        order = []
+
+        def fake_provision(org, stack, name, *a):
+            t[0] += provision.dt.timedelta(seconds=40)
+            order.append(name)
+            return self.pushed(name, t[0].isoformat().replace("+00:00", "Z"))
+
+        w.poll = mock.Mock(side_effect=lambda f=w.poll: (order.append("poll"), f())[1])
+        with mock.patch.object(provision, "provision_one", fake_provision):
+            provision.run("Org", "python", 3, "x==1", "7", "", existing=[], watch=w)
+        self.assertEqual(nudged, ["python-01", "python-02", "python-03"])
+        self.assertLess(order.index("python-01"), order.index("python-03"))
+        self.assertEqual(order[:6], ["python-01", "poll", "python-02", "poll", "python-03", "poll"])
 
     def test_provision_error_is_recorded(self):
         def fail(path, method="GET", body=None, **kw):
