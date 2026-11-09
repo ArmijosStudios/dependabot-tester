@@ -4,7 +4,8 @@ Usage: cleanup.py --org ORG [--source-repo NAME] [--stacks python,node] [--issue
 
 A repo is only deleted when everything `provision.py` stamps on it matches:
   - its name is `<stack>-<number>`,
-  - it has the `issue-repo-dependency-updater`, `<stack>` and `issue-<N>` topics,
+  - it has the `dependabot-tester` (or legacy `issue-repo-dependency-updater`), `<stack>`
+    and `issue-<N>` topics,
   - its description is the generated one pointing at issue N of this repo
     (or its old name, `issue-repo-dependency-updater`),
   - it isn't a fork.
@@ -18,7 +19,7 @@ import re
 import sys
 
 import gh
-from stacks import LEGACY_SOURCE_REPOS, STACKS, TOPIC, repo_index, repo_key
+from stacks import LEGACY_SOURCE_REPOS, LEGACY_TOPICS, STACKS, TOPIC, repo_index, repo_key
 
 
 def source_names(source_repo):
@@ -32,7 +33,7 @@ def generated_by_us(repo, org, sources):
         return None
     topics = set(repo.get("topics") or [])
     issues = {t[len("issue-"):] for t in topics if re.fullmatch(r"issue-\d+", t)}
-    if TOPIC not in topics or stack not in topics or len(issues) != 1:
+    if not topics & {TOPIC, *LEGACY_TOPICS} or stack not in topics or len(issues) != 1:
         return None
     m = re.fullmatch(
         rf"{re.escape(stack)} repo with a vulnerable .+, generated from "

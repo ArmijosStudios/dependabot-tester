@@ -56,7 +56,7 @@ def in_range(version, spec):
 
 
 def fetch_json(url, headers=None):
-    req = urllib.request.Request(url, headers={"User-Agent": "issue-repo-dependency-updater", **(headers or {})})
+    req = urllib.request.Request(url, headers={"User-Agent": "dependabot-tester", **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.load(resp)
@@ -65,7 +65,7 @@ def fetch_json(url, headers=None):
 
 
 def fetch_text(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "issue-repo-dependency-updater"})
+    req = urllib.request.Request(url, headers={"User-Agent": "dependabot-tester"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return resp.read().decode()

@@ -61,7 +61,7 @@ The advisory picker still reads versions from the public registry.
 | `.github/dependabot.yml` | One `/` entry for the stack's ecosystem, weekly, `open-pull-requests-limit: 0` so only security update PRs open (a grouped version-update PR would otherwise bump the package first and pre-empt the security PR). Python and Ruby entries also set `insecure-external-code-execution: allow`; Dependabot only accepts it for `pip`, `bundler` and `mix` |
 | `README.md` | Points back to the issue |
 
-The repo is private, gets topics `issue-repo-dependency-updater`, `<stack>` and `issue-<N>`, and
+The repo is private, gets topics `dependabot-tester`, `<stack>` and `issue-<N>`, and
 after the push `PUT /vulnerability-alerts` (Dependabot alerts + dependency graph) and
 `PUT /automated-security-fixes` (Dependabot security updates) are called.
 
@@ -97,7 +97,7 @@ number and the rollout run id.
 **Delete generated repos** (`delete-repos.yml`, manual): deletes only repos this repo's rollouts
 created, optionally only some stacks or one issue's repos. A repo is deleted only if it matches
 everything `provision.py` stamps on it: a `<stack>-<number>` name, the
-`issue-repo-dependency-updater`, `<stack>` and `issue-<N>` topics, the generated description linking
+`dependabot-tester` (or legacy `issue-repo-dependency-updater`), `<stack>` and `issue-<N>` topics, the generated description linking
 to issue N of this repo (or its old name `issue-repo-dependency-updater`), and not a fork. Anything
 else in the org, including repos that only look generated, is left alone and listed as `skipped`.
 It is a dry run unless `confirm` is `delete`.

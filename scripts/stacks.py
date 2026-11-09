@@ -14,7 +14,9 @@ STACKS = {
 }
 
 MAX_REPOS_PER_STACK = 200
-TOPIC = "issue-repo-dependency-updater"
+TOPIC = "dependabot-tester"
+# Topics older generated repos were stamped with; cleanup still accepts them.
+LEGACY_TOPICS = ("issue-repo-dependency-updater",)
 # Former names of this repo; generated repo descriptions link to issues under them.
 LEGACY_SOURCE_REPOS = ("issue-repo-dependency-updater",)
 
