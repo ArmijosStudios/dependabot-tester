@@ -15,6 +15,8 @@ STACKS = {
 
 MAX_REPOS_PER_STACK = 200
 TOPIC = "issue-repo-dependency-updater"
+# Former names of this repo; generated repo descriptions link to issues under them.
+LEGACY_SOURCE_REPOS = ("issue-repo-dependency-updater",)
 
 
 def repo_name(stack, index):

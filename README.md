@@ -94,9 +94,13 @@ shortened to fit an issue comment; the full report is in the run summary and the
 `dependabot-metrics` artifact (`metrics.json`). Re-run it from the Actions tab with the issue
 number and the rollout run id.
 
-**Delete generated repos** (`delete-repos.yml`, manual): deletes repos that have the
-`issue-repo-dependency-updater` topic and a `<stack>-<number>` name, optionally only some stacks or
-one issue's repos. It is a dry run unless `confirm` is `delete`.
+**Delete generated repos** (`delete-repos.yml`, manual): deletes only repos this repo's rollouts
+created, optionally only some stacks or one issue's repos. A repo is deleted only if it matches
+everything `provision.py` stamps on it: a `<stack>-<number>` name, the
+`issue-repo-dependency-updater`, `<stack>` and `issue-<N>` topics, the generated description linking
+to issue N of this repo (or its old name `issue-repo-dependency-updater`), and not a fork. Anything
+else in the org, including repos that only look generated, is left alone and listed as `skipped`.
+It is a dry run unless `confirm` is `delete`.
 
 ## Layout
 

@@ -35,4 +35,4 @@ jobs:
         run: |
           flag=--dry-run
           [ "$CONFIRM" = "delete" ] && flag=
-          python3 scripts/cleanup.py --org "$ORG" --stacks "$STACKS" --issue "$ISSUE" $flag | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/cleanup.py --org "$ORG" --source-repo "$GITHUB_REPOSITORY" --stacks "$STACKS" --issue "$ISSUE" $flag | tee -a "$GITHUB_STEP_SUMMARY"
