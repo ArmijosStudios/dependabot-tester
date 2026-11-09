@@ -329,12 +329,13 @@ class CleanupTests(unittest.TestCase):
             self.repo("python-06", [t, "python", "issue-3"], 3, fork=True),
             self.repo("python-07", [t, "node", "issue-3"], 3),
             self.repo("python-08", [t, "python", "issue-3"], 3, source="issue-repo-dependency-updater"),
+            self.repo("python-09", ["issue-repo-dependency-updater", "python", "issue-3"], 3),
             self.repo("celi-ios", [t, "issue-3"], 3),
             self.repo("go-10", [t, "go", "issue-4"], 4),
             self.repo("go-9", [t, "go", "issue-4"], 4),
         ]
         self.assertEqual(cleanup.targets(repos, "o", "o/dependabot-tester"), (
-            ["o/go-9", "o/go-10", "o/python-01", "o/python-08"],
+            ["o/go-9", "o/go-10", "o/python-01", "o/python-08", "o/python-09"],
             ["o/python-02", "o/python-03", "o/python-04", "o/python-05", "o/python-06", "o/python-07"]))
         self.assertEqual(cleanup.targets(repos, "o", "o/dependabot-tester", ["go"]),
                          (["o/go-9", "o/go-10"], []))

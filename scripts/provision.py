@@ -7,7 +7,7 @@ Usage: provision.py STACK COUNT DEPENDENCY --org ORG [--issue N] [--issue-url UR
 Repos are named `<stack>-<NN>`, numbered after the highest existing one in the org
 (`python-03` exists -> `python-04`, `python-05`, ...). For each repo it:
   1. creates a private repo with an initial README commit on `main` and the
-     `issue-repo-dependency-updater` and stack topics,
+     `dependabot-tester` and stack topics,
   2. enables Dependabot alerts (and the dependency graph) and Dependabot security updates,
   3. pushes one commit on top of `main` with the package file, a lockfile where one can be
      generated, `.github/dependabot.yml` and a README, then enables both again.
