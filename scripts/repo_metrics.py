@@ -189,6 +189,7 @@ def summarize_repo(prov, state, runs):
     return {
         "repo": prov["repo"], "name": prov["name"], "url": prov["url"], "stack": prov["stack"],
         "dependency": prov["dependency"], "lockfile": prov.get("lockfile"), "error": prov.get("error"),
+        "nudged": bool(prov.get("nudged_at")),
         "alerts": len(alerts),
         "alert": alert and {"number": alert["number"], "ghsa": alert["securityAdvisory"]["ghsaId"],
                             "severity": alert["securityAdvisory"]["severity"].lower(),
@@ -251,7 +252,8 @@ def render(rows, state, wait_note="", limit=COMMENT_LIMIT):
         f"**Repos:** {len(ok)}/{len(rows)} created · **Alerted:** {len(with_alert)}/{len(ok)} · "
         f"**Security PRs:** {len(with_pr)}/{len(ok)} ({rate(len(with_pr), len(ok))}) · "
         f"**Dependabot runs:** {len(runs)} · **Failed:** {len(failed)}/{len(completed)} · "
-        f"**Failure rate:** {rate(len(failed), len(completed))}",
+        f"**Failure rate:** {rate(len(failed), len(completed))} · "
+        f"**Nudged:** {sum(bool(r.get('nudged')) for r in ok)}",
         "",
         "| Metric | Count | Avg | p50 | p95 | Max |",
         "|---|---|---|---|---|---|",
@@ -313,7 +315,8 @@ def render(rows, state, wait_note="", limit=COMMENT_LIMIT):
     for r in sorted(rows, key=lambda r: (r["stack"], repo_key(r["name"]))):
         alert = (f"[{r['alert']['severity']}]({r['alert']['url']})" if r["alert"] else "–")
         pr = f"[#{r['pr']['number']}]({r['pr']['url']})" if r["pr"] else "–"
-        table.append(f"| [{r['name']}]({r['url']}) | `{r['dependency']}` | {r['lockfile'] or '–'} | {alert} | {pr} | "
+        nudged = " (nudged)" if r.get("nudged") else ""
+        table.append(f"| [{r['name']}]({r['url']}){nudged} | `{r['dependency']}` | {r['lockfile'] or '–'} | {alert} | {pr} | "
                      f"{fmt_s(r['t_alert'])} | {fmt_s(r['t_job'])} | {fmt_s(r['t_pr'])} | "
                      f"{len(r['runs'])} ({sum(x['failed'] for x in r['runs'])}) | {r['version_prs']} |")
     body = "\n".join(out) + "\n"

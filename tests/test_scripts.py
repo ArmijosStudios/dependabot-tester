@@ -151,11 +151,72 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual([c[:2] for c in calls], [
             ("POST", "orgs/Org/repos"), ("PUT", "repos/Org/python-01/topics"),
             ("PUT", "repos/Org/python-01/vulnerability-alerts"),
+            ("PUT", "repos/Org/python-01/automated-security-fixes"),
+            ("PUT", "repos/Org/python-01/vulnerability-alerts"),
             ("PUT", "repos/Org/python-01/automated-security-fixes")])
+        self.assertNotIn("enable_before_push_error", r)
         self.assertTrue(calls[0][2]["private"])
         self.assertEqual(calls[1][2]["names"], [stacks.TOPIC, "python", "issue-7"])
         files = push.call_args[0][2]
         self.assertEqual(sorted(files), [".github/dependabot.yml", "README.md", "requirements.txt"])
+
+    def test_enabled_before_push(self):
+        order = []
+
+        def fake_api(path, method="GET", body=None, **kw):
+            order.append(path.rsplit("/", 1)[-1])
+            return {"created_at": "2026-01-01T00:00:00Z"} if method == "POST" else None
+
+        with mock.patch.object(gh, "api", fake_api), \
+                mock.patch.object(provision, "push", side_effect=lambda *a: order.append("push") or "abc"):
+            provision.provision_one("Org", "python", "python-01", "requests==2.19.1", "7", "",
+                                    make_lockfiles=False)
+        self.assertLess(order.index("vulnerability-alerts"), order.index("push"))
+        self.assertLess(order.index("automated-security-fixes"), order.index("push"))
+
+    def test_enable_before_push_failure_is_not_fatal(self):
+        def fake_api(path, method="GET", body=None, **kw):
+            if method == "POST":
+                return {"created_at": "2026-01-01T00:00:00Z"}
+            if path.endswith("vulnerability-alerts") and not pushed:
+                raise gh.GhError("PUT vulnerability-alerts: HTTP 422")
+
+        pushed = []
+        with mock.patch.object(gh, "api", fake_api), \
+                mock.patch.object(provision, "push", side_effect=lambda *a: pushed.append(1) or "abc"):
+            r = provision.provision_one("Org", "python", "python-01", "requests==2.19.1", "7", "",
+                                        make_lockfiles=False)
+        self.assertIsNone(r["error"])
+        self.assertIn("422", r["enable_before_push_error"])
+        self.assertIn("dependabot_enabled_at", r)
+
+    def test_nudge_only_repos_without_runs(self):
+        import base64
+        calls, slept = [], []
+
+        def fake_api(path, method="GET", body=None, **kw):
+            calls.append((method, path, body))
+            if "actions/runs" in path:
+                return {"total_count": 1 if "python-01" in path else 0}
+            if method == "GET":
+                return {"sha": "s1", "content": base64.b64encode(b"version: 2\n").decode()}
+
+        t0 = provision.parse_ts("2026-01-01T00:00:00Z")
+        repos = [{"name": "python-01", "repo": "Org/python-01", "error": None, "pushed_at": "2026-01-01T00:00:00Z"},
+                 {"name": "python-02", "repo": "Org/python-02", "error": None, "pushed_at": "2026-01-01T00:01:00Z"},
+                 {"name": "python-03", "repo": "Org/python-03", "error": "boom"}]
+        with mock.patch.object(gh, "api", fake_api):
+            provision.nudge("Org", repos, 180, sleep=slept.append,
+                            clock=lambda: t0 + provision.dt.timedelta(seconds=100))
+        self.assertEqual(slept, [80, 140])
+        self.assertNotIn("nudged_at", repos[0])
+        self.assertIn("nudged_at", repos[1])
+        put = [c for c in calls if c[0] == "PUT"]
+        self.assertEqual(len(put), 1)
+        self.assertEqual(put[0][1], "repos/Org/python-02/contents/.github/dependabot.yml")
+        self.assertEqual(put[0][2]["sha"], "s1")
+        text = base64.b64decode(put[0][2]["content"]).decode()
+        self.assertTrue(text.startswith("version: 2\n# rerun requested "))
 
     def test_provision_error_is_recorded(self):
         def fail(path, method="GET", body=None, **kw):

@@ -129,6 +129,9 @@ jobs:
           names = [f"[{x['name']}]({x['url']})" for r in reports.values() for x in r["repos"] if not x["error"]]
           if names:
               print("\n<details><summary>Repos</summary>\n\n" + ", ".join(names) + "\n\n</details>")
+          nudged = [f"[{x['name']}]({x['url']})" for r in reports.values() for x in r["repos"] if x.get("nudged_at")]
+          if nudged:
+              print(f"\n**Nudged** (no Dependabot run 3 min after push, so `dependabot.yml` was touched to rerun it): {', '.join(nudged)}")
           errors = [f"- `{x['repo']}`: {x['error']}" for r in reports.values() for x in r["repos"] if x["error"]]
           if errors:
               print("\n**Failed:**\n" + "\n".join(errors))
