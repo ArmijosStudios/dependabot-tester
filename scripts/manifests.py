@@ -63,8 +63,13 @@ def registry_files(stack, registry):
     return {}
 
 
+# Dependabot only accepts insecure-external-code-execution for these ecosystems.
+CODE_EXECUTION_ECOSYSTEMS = {"bundler", "mix", "pip"}
+
+
 def dependabot_yml(stack, registry=None):
     eco = STACKS[stack]["ecosystem"]
+    code_exec = "    insecure-external-code-execution: allow\n" if eco in CODE_EXECUTION_ECOSYSTEMS else ""
     registries, use = "", ""
     if registry:
         # goproxy-server has no replaces-base; Dependabot uses the configured proxy directly.
@@ -78,6 +83,7 @@ def dependabot_yml(stack, registry=None):
         "updates:\n"
         f'  - package-ecosystem: "{eco}"\n'
         '    directory: "/"\n'
+        f"{code_exec}"
         f"{use}"
         "    schedule:\n"
         '      interval: "weekly"\n'

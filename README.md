@@ -58,7 +58,7 @@ The advisory picker still reads versions from the public registry.
 |---|---|
 | `requirements.txt` / `package.json` / `Gemfile` / `go.mod` | Just the vulnerable dependency |
 | Lockfile, when it can be generated | `package-lock.json` (`npm install --package-lock-only`), `Gemfile.lock` (`bundle lock`), `go.sum` (`go get`). Best effort: if resolution fails the repo is pushed without one, and the comment shows which repos have one. Python gets none. |
-| `.github/dependabot.yml` | One `/` entry for the stack's ecosystem, weekly, `open-pull-requests-limit: 0` so only security update PRs open (a grouped version-update PR would otherwise bump the package first and pre-empt the security PR) |
+| `.github/dependabot.yml` | One `/` entry for the stack's ecosystem, weekly, `open-pull-requests-limit: 0` so only security update PRs open (a grouped version-update PR would otherwise bump the package first and pre-empt the security PR). Python and Ruby entries also set `insecure-external-code-execution: allow`; Dependabot only accepts it for `pip`, `bundler` and `mix` |
 | `README.md` | Points back to the issue |
 
 The repo is private, gets topics `issue-repo-dependency-updater`, `<stack>` and `issue-<N>`, and
