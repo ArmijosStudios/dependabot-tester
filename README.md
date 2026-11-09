@@ -62,8 +62,15 @@ The advisory picker still reads versions from the public registry.
 | `README.md` | Points back to the issue |
 
 The repo is private, gets topics `issue-repo-dependency-updater`, `<stack>` and `issue-<N>`, and
-after the push `PUT /vulnerability-alerts` (Dependabot alerts + dependency graph) and
-`PUT /automated-security-fixes` (Dependabot security updates) are called.
+`PUT /vulnerability-alerts` (Dependabot alerts + dependency graph) and
+`PUT /automated-security-fixes` (Dependabot security updates) are called before the push (and again
+after it). Enabling them only after the push raced Dependabot's handling of the push: about half the
+repos got no Dependabot run on push and waited ~30 min for a periodic scan.
+
+Safety net: once all of a stack's repos are pushed, any repo with no Dependabot run 3 minutes after
+its push (`provision.py --nudge-after`, 0 turns it off) gets a commit that appends a comment to
+`dependabot.yml`, which makes Dependabot rerun. These repos are listed as **Nudged** in the rollout
+comment and marked `(nudged)` in the metrics; their times are still measured from the first push.
 
 ## Workflows
 
