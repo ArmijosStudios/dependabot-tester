@@ -2,17 +2,21 @@
 
 Usage: provision.py STACK COUNT DEPENDENCY --org ORG [--issue N] [--issue-url URL]
                     [--report out/STACK.json] [--nudge-after SECONDS]
+                    [--nudge-attempts N]
 
 Repos are named `<stack>-<NN>`, numbered after the highest existing one in the org
 (`python-03` exists -> `python-04`, `python-05`, ...). For each repo it:
-  1. creates a private, empty repo with the `dependabot-tester` and stack topics,
+  1. creates a private repo with an initial README commit on `main` and the
+     `dependabot-tester` and stack topics,
   2. enables Dependabot alerts (and the dependency graph) and Dependabot security updates,
-  3. pushes one commit to `main` with the package file, a lockfile where one can be
+  3. pushes one commit on top of `main` with the package file, a lockfile where one can be
      generated, `.github/dependabot.yml` and a README, then enables both again.
-Enabling after the push races Dependabot's handling of that push: when Dependabot sees the push
-first it skips it and the repo waits ~30 min for a periodic scan. So they are enabled up front too.
-After every repo is pushed, repos with no Dependabot run --nudge-after seconds after their push
-get a commit that touches `dependabot.yml`, which makes Dependabot rerun (`nudged_at`).
+A push that Dependabot misses gets no `Graph Update` run and the repo waits ~30 min for a
+periodic scan. Pushing the manifest to an existing default branch, with Dependabot already on,
+avoids racing the first push to an empty repo. As a safety net, while the stack is being
+provisioned, every repo with no Dependabot run --nudge-after seconds after its push (or after
+its last nudge) gets a commit touching the package file and `dependabot.yml`, up to
+--nudge-attempts times (`nudged_at`, `nudges`).
 GH_TOKEN must be able to create and administer repos in the org.
 """
 
@@ -30,6 +34,10 @@ import time
 import gh
 import manifests
 from stacks import STACKS, TOPIC, repo_index, repo_name
+
+FETCH_ATTEMPTS = 3
+NUDGE_AFTER = 60
+NUDGE_ATTEMPTS = 3
 
 
 def now():
@@ -59,7 +67,8 @@ def build_files(stack, repo, spec, org, issue_url, make_lockfiles=True, registry
     return files, lockfile
 
 
-def push(org, repo, files, message):
+def push(org, repo, files, message, sleep=time.sleep):
+    """Commit `files` on top of the remote `main` (the auto_init README commit) and push."""
     token = os.environ["GH_TOKEN"]
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
@@ -75,10 +84,19 @@ def push(org, repo, files, message):
                 raise gh.GhError(f"git {args[0]}: {(p.stderr + p.stdout).replace(token, '***').strip()[:300]}")
             return p.stdout.strip()
 
+        url = f"https://x-access-token:{token}@github.com/{org}/{repo}.git"
         git("init", "-q", "-b", "main")
+        for attempt in range(FETCH_ATTEMPTS):
+            try:
+                git("fetch", "-q", "--depth", "1", url, "main")
+                git("reset", "-q", "--soft", "FETCH_HEAD")
+                break
+            except gh.GhError:
+                if attempt + 1 < FETCH_ATTEMPTS:
+                    sleep(2)
         git("add", "-A")
         git("commit", "-q", "-m", message)
-        git("push", "-q", f"https://x-access-token:{token}@github.com/{org}/{repo}.git", "main")
+        git("push", "-q", url, "main")
         return git("rev-parse", "HEAD")
 
 
@@ -92,7 +110,7 @@ def provision_one(org, stack, repo, spec, issue, issue_url, make_lockfiles=True,
          "stack": stack, "dependency": spec, "registry": registry, "lockfile": None, "error": None}
     try:
         created = gh.api(f"orgs/{org}/repos", "POST", {
-            "name": repo, "private": True, "auto_init": False,
+            "name": repo, "private": True, "auto_init": True,
             "description": f"{stack} repo with a vulnerable {spec}, generated from {issue_url}",
             "has_wiki": False, "has_projects": False,
         })
@@ -122,43 +140,102 @@ def has_dependabot_run(org, repo):
     return bool((runs or {}).get("total_count"))
 
 
-def nudge_commit(org, repo):
-    """Commit a comment change to dependabot.yml; any change to it makes Dependabot rerun."""
-    path = f"repos/{org}/{repo}/contents/.github/dependabot.yml"
-    cur = gh.api(path)
-    text = base64.b64decode(cur["content"]).decode() + f"# rerun requested {now()}\n"
-    gh.api(path, "PUT", {"message": "Rerun Dependabot", "sha": cur["sha"],
-                         "content": base64.b64encode(text.encode()).decode()})
+def touch(path, text, stamp):
+    """Append a harmless marker to a package file or `dependabot.yml`."""
+    if path.endswith(".json"):
+        doc = json.loads(text)
+        doc["description"] = f"rerun requested {stamp}"
+        return json.dumps(doc, indent=2) + "\n"
+    comment = "//" if path.endswith("go.mod") else "#"
+    return text + ("" if text.endswith("\n") else "\n") + f"{comment} rerun requested {stamp}\n"
 
 
-def nudge(org, repos, after, sleep=time.sleep, clock=lambda: dt.datetime.now(dt.timezone.utc)):
-    """Nudge repos that have no Dependabot run `after` seconds after their push."""
-    for r in repos:
-        if r["error"] or not r.get("pushed_at"):
-            continue
-        wait = after - (clock() - parse_ts(r["pushed_at"])).total_seconds()
-        if wait > 0:
-            sleep(wait)
-        try:
-            if has_dependabot_run(org, r["name"]):
-                continue
-            nudge_commit(org, r["name"])
-            r["nudged_at"] = now()
-            print(f"{r['repo']}: no Dependabot run {after}s after push, nudged", file=sys.stderr)
-        except gh.GhError as e:
-            print(f"{r['repo']}: nudge failed: {e}", file=sys.stderr)
+def nudge_commit(org, repo, stack, stamp=None):
+    """One commit touching the package file and `dependabot.yml`.
+
+    The package file change makes the dependency graph re-read it (a `Graph Update` run, then
+    the alert and security update); the `dependabot.yml` change makes Dependabot reload its config.
+    """
+    stamp = stamp or now()
+    base = f"repos/{org}/{repo}"
+    head = gh.api(f"{base}/git/ref/heads/main")["object"]["sha"]
+    tree = []
+    for path in (STACKS[stack]["file"], ".github/dependabot.yml"):
+        cur = gh.api(f"{base}/contents/{path}?ref={head}")
+        text = base64.b64decode(cur["content"]).decode()
+        tree.append({"path": path, "mode": "100644", "type": "blob", "content": touch(path, text, stamp)})
+    base_tree = gh.api(f"{base}/git/commits/{head}")["tree"]["sha"]
+    new_tree = gh.api(f"{base}/git/trees", "POST", {"base_tree": base_tree, "tree": tree})["sha"]
+    commit = gh.api(f"{base}/git/commits", "POST", {"message": "Rerun Dependabot", "tree": new_tree,
+                                                    "parents": [head]})["sha"]
+    gh.api(f"{base}/git/refs/heads/main", "PATCH", {"sha": commit})
+    return commit
+
+
+def utcnow():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+class Watch:
+    """Nudges repos that get no Dependabot run, while the rest of the stack is still being created.
+
+    A repo is checked `after` seconds after its push and after each nudge; it is dropped as soon as
+    it has a Dependabot run, or after `attempts` nudges.
+    """
+
+    def __init__(self, org, after=NUDGE_AFTER, attempts=NUDGE_ATTEMPTS, clock=utcnow, sleep=time.sleep):
+        self.org, self.after, self.attempts = org, after, attempts
+        self.clock, self.sleep = clock, sleep
+        self.pending = []
+
+    def add(self, r):
+        if self.after > 0 and not r["error"] and r.get("pushed_at"):
+            self.pending.append([parse_ts(r["pushed_at"]) + dt.timedelta(seconds=self.after), r])
+
+    def poll(self):
+        """Check every repo that is due; never sleeps."""
+        due = [p for p in self.pending if p[0] <= self.clock()]
+        for item in due:
+            r = item[1]
+            nudges = r.get("nudges", [])
+            try:
+                if has_dependabot_run(self.org, r["name"]):
+                    self.pending.remove(item)
+                    continue
+                if len(nudges) >= self.attempts:
+                    self.pending.remove(item)
+                    print(f"{r['repo']}: still no Dependabot run after {len(nudges)} nudges", file=sys.stderr)
+                    continue
+                stamp = self.clock().isoformat(timespec="seconds").replace("+00:00", "Z")
+                nudge_commit(self.org, r["name"], r["stack"], stamp)
+                r["nudges"] = nudges + [stamp]
+                r.setdefault("nudged_at", stamp)
+                print(f"{r['repo']}: no Dependabot run yet, nudge {len(r['nudges'])}", file=sys.stderr)
+            except gh.GhError as e:
+                print(f"{r['repo']}: nudge check failed: {e}", file=sys.stderr)
+            item[0] = self.clock() + dt.timedelta(seconds=self.after)
+
+    def drain(self):
+        """Keep polling until every repo has a Dependabot run or is out of nudges."""
+        while self.pending:
+            wait = (min(p[0] for p in self.pending) - self.clock()).total_seconds()
+            if wait > 0:
+                self.sleep(wait)
+            self.poll()
 
 
 def run(org, stack, count, spec, issue, issue_url, existing=None, make_lockfiles=True, registry=None,
-        nudge_after=0):
+        nudge_after=0, nudge_attempts=NUDGE_ATTEMPTS, watch=None):
     existing = org_repo_names(org) if existing is None else existing
+    watch = watch or Watch(org, nudge_after, nudge_attempts)
     repos = []
     for name in next_names(stack, count, existing):
         r = provision_one(org, stack, name, spec, issue, issue_url, make_lockfiles, registry)
         print(f"{r['repo']}: {r['error'] or 'ok'}", file=sys.stderr)
         repos.append(r)
-    if nudge_after > 0:
-        nudge(org, repos, nudge_after)
+        watch.add(r)
+        watch.poll()
+    watch.drain()
     return {"stack": stack, "dependency": spec, "registry": registry, "requested": count,
             "created": sum(r["error"] is None for r in repos), "repos": repos}
 
@@ -174,12 +251,14 @@ def main():
     ap.add_argument("--advisory", default="null", help="advisory JSON from the parse step")
     ap.add_argument("--registry", default="", help="custom registry URL (blank = public registry)")
     ap.add_argument("--report")
-    ap.add_argument("--nudge-after", type=int, default=180,
-                    help="nudge repos with no Dependabot run this many seconds after push (0 = off)")
+    ap.add_argument("--nudge-after", type=int, default=NUDGE_AFTER,
+                    help="nudge repos with no Dependabot run this many seconds after push/last nudge (0 = off)")
+    ap.add_argument("--nudge-attempts", type=int, default=NUDGE_ATTEMPTS)
     args = ap.parse_args()
 
     report = run(args.org, args.stack, args.count, args.dependency.strip(), args.issue, args.issue_url,
-                 registry=args.registry.strip() or None, nudge_after=args.nudge_after)
+                 registry=args.registry.strip() or None, nudge_after=args.nudge_after,
+                 nudge_attempts=args.nudge_attempts)
     report["advisory"] = json.loads(args.advisory or "null")
     print(json.dumps(report, indent=2))
     if args.report:

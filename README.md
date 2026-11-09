@@ -61,16 +61,22 @@ The advisory picker still reads versions from the public registry.
 | `.github/dependabot.yml` | One `/` entry for the stack's ecosystem, weekly, `open-pull-requests-limit: 0` so only security update PRs open (a grouped version-update PR would otherwise bump the package first and pre-empt the security PR). Python and Ruby entries also set `insecure-external-code-execution: allow`; Dependabot only accepts it for `pip`, `bundler` and `mix` |
 | `README.md` | Points back to the issue |
 
-The repo is private, gets topics `dependabot-tester`, `<stack>` and `issue-<N>`, and
-`PUT /vulnerability-alerts` (Dependabot alerts + dependency graph) and
-`PUT /automated-security-fixes` (Dependabot security updates) are called before the push (and again
-after it). Enabling them only after the push raced Dependabot's handling of the push: about half the
-repos got no Dependabot run on push and waited ~30 min for a periodic scan.
+The repo is private, is created with an initial README commit on `main`, gets topics
+`dependabot-tester`, `<stack>` and `issue-<N>`, and `PUT /vulnerability-alerts`
+(Dependabot alerts + dependency graph) and `PUT /automated-security-fixes` (Dependabot security
+updates) are called before the manifest commit is pushed on top of `main` (and again after it).
 
-Safety net: once all of a stack's repos are pushed, any repo with no Dependabot run 3 minutes after
-its push (`provision.py --nudge-after`, 0 turns it off) gets a commit that appends a comment to
-`dependabot.yml`, which makes Dependabot rerun. These repos are listed as **Nudged** in the rollout
-comment and marked `(nudged)` in the metrics; their times are still measured from the first push.
+When Dependabot picks up the push, a `Graph Update` run starts 5-15 s later, the alert follows about
+a minute after that and the security update PR a minute after that. When it misses the push (about
+half the repos when the manifest was the first push to an empty repo, with Dependabot enabled after
+it), nothing happens until a periodic scan ~30 min later.
+
+Safety net: while the stack's repos are being created (not only after the last one), any repo with
+no Dependabot run 60 s after its push (`provision.py --nudge-after`, 0 turns it off) gets one commit
+that appends a comment to the package file (a `description` for `package.json`) and to
+`dependabot.yml`, which makes Dependabot re-read both. It is checked again 60 s after each nudge, up
+to 3 nudges (`--nudge-attempts`). These repos are listed as **Nudged** in the rollout comment and
+marked `(nudged)` in the metrics; their times are still measured from the first push.
 
 ## Workflows
 
