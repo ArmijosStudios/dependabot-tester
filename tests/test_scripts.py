@@ -109,6 +109,8 @@ class ManifestTests(unittest.TestCase):
             self.assertIn(f'package-ecosystem: "{cfg["ecosystem"]}"', text)
             self.assertIn('directory: "/"', text)
             self.assertEqual(text.count("package-ecosystem"), 1)
+            self.assertEqual("insecure-external-code-execution: allow\n" in text,
+                             cfg["ecosystem"] in ("pip", "bundler"))
 
     def test_registry_config(self):
         self.assertNotIn("registries", manifests.dependabot_yml("python"))
@@ -117,7 +119,7 @@ class ManifestTests(unittest.TestCase):
             self.assertTrue(text.startswith(f"version: 2\nregistries:\n  {stack}:\n    type: {cfg['registry_type']}\n"
                                             '    url: "https://r.example.com/x"\n'))
             self.assertEqual("replaces-base: true" in text, stack != "go")
-            self.assertIn(f'directory: "/"\n    registries:\n      - {stack}\n', text)
+            self.assertIn(f'    registries:\n      - {stack}\n    schedule:', text)
         url = "https://r.example.com"
         self.assertEqual(manifests.package_file("python", "p", "x==1", registry=url), f"--index-url {url}\nx==1\n")
         self.assertTrue(manifests.package_file("ruby", "r", "rack@2.0.0", registry=url).startswith(f'source "{url}"'))
