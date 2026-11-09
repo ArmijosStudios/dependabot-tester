@@ -181,17 +181,50 @@ class GhTests(unittest.TestCase):
 
 
 class CleanupTests(unittest.TestCase):
-    def test_targets_need_topic_and_name(self):
+    @staticmethod
+    def repo(name, topics, issue=None, source="dependabot-tester", **extra):
+        stack = name.rsplit("-", 1)[0]
+        desc = (f"{stack} repo with a vulnerable pkg==1.0, generated from "
+                f"https://github.com/o/{source}/issues/{issue}") if issue else None
+        return {"name": name, "full_name": f"o/{name}", "topics": topics, "description": desc, **extra}
+
+    def test_targets_need_every_provision_marker(self):
+        t = stacks.TOPIC
         repos = [
-            {"name": "python-01", "full_name": "o/python-01", "topics": [stacks.TOPIC, "issue-3"]},
-            {"name": "python-02", "full_name": "o/python-02", "topics": []},
-            {"name": "celi-ios", "full_name": "o/celi-ios", "topics": [stacks.TOPIC]},
-            {"name": "go-10", "full_name": "o/go-10", "topics": [stacks.TOPIC, "issue-4"]},
-            {"name": "go-9", "full_name": "o/go-9", "topics": [stacks.TOPIC, "issue-4"]},
+            self.repo("python-01", [t, "python", "issue-3"], 3),
+            self.repo("python-02", [], 3),
+            self.repo("python-03", [t, "python", "issue-3"]),
+            self.repo("python-04", [t, "python", "issue-3"], 3, source="other-tool"),
+            self.repo("python-05", [t, "python", "issue-3"], 5),
+            self.repo("python-06", [t, "python", "issue-3"], 3, fork=True),
+            self.repo("python-07", [t, "node", "issue-3"], 3),
+            self.repo("python-08", [t, "python", "issue-3"], 3, source="issue-repo-dependency-updater"),
+            self.repo("celi-ios", [t, "issue-3"], 3),
+            self.repo("go-10", [t, "go", "issue-4"], 4),
+            self.repo("go-9", [t, "go", "issue-4"], 4),
         ]
-        self.assertEqual(cleanup.targets(repos), ["o/go-9", "o/go-10", "o/python-01"])
-        self.assertEqual(cleanup.targets(repos, ["python"]), ["o/python-01"])
-        self.assertEqual(cleanup.targets(repos, issue="4"), ["o/go-9", "o/go-10"])
+        self.assertEqual(cleanup.targets(repos, "o", "o/dependabot-tester"), (
+            ["o/go-9", "o/go-10", "o/python-01", "o/python-08"],
+            ["o/python-02", "o/python-03", "o/python-04", "o/python-05", "o/python-06", "o/python-07"]))
+        self.assertEqual(cleanup.targets(repos, "o", "o/dependabot-tester", ["go"]),
+                         (["o/go-9", "o/go-10"], []))
+        self.assertEqual(cleanup.targets(repos, "o", "o/dependabot-tester", issue="4")[0],
+                         ["o/go-9", "o/go-10"])
+
+    def test_other_org_or_source_not_matched(self):
+        r = self.repo("node-01", [stacks.TOPIC, "node", "issue-1"], 1)
+        self.assertEqual(cleanup.targets([r], "other-org", "other-org/dependabot-tester")[0], [])
+        self.assertEqual(cleanup.targets([r], "o", "o/dependabot-tester")[0], ["o/node-01"])
+
+    def test_matches_description_written_by_provision(self):
+        calls = []
+        with mock.patch.object(provision.gh, "api", side_effect=lambda *a, **k: calls.append(a) or {"created_at": "x"}), \
+             mock.patch.object(provision, "push", return_value="sha"):
+            provision.provision_one("o", "ruby", "ruby-01", "rack 2.0", "9",
+                                    "https://github.com/o/dependabot-tester/issues/9", make_lockfiles=False)
+        repo = {"name": "ruby-01", "full_name": "o/ruby-01", "description": calls[0][2]["description"],
+                "topics": calls[1][2]["names"]}
+        self.assertEqual(cleanup.targets([repo], "o", "o/dependabot-tester"), (["o/ruby-01"], []))
 
 
 LOG = """\
