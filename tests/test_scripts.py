@@ -117,7 +117,9 @@ class ManifestTests(unittest.TestCase):
         for stack, cfg in stacks.STACKS.items():
             text = manifests.dependabot_yml(stack, "https://r.example.com/x")
             self.assertTrue(text.startswith(f"version: 2\nregistries:\n  {stack}:\n    type: {cfg['registry_type']}\n"
-                                            '    url: "https://r.example.com/x"\n'))
+                                            '    url: "https://r.example.com/x"\n'
+                                            "    username: ${{secrets.ARTIFACTORY_USERNAME}}\n"
+                                            "    password: ${{secrets.ARTIFACTORY_PASSWORD}}\n"))
             self.assertEqual("replaces-base: true" in text, stack != "go")
             self.assertIn(f'    registries:\n      - {stack}\n    schedule:', text)
         url = "https://r.example.com"

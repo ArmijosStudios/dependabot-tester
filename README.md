@@ -48,7 +48,11 @@ With `stack=URL` set, that stack's repos get the registry in the package manager
 (`--index-url` in `requirements.txt`, `.npmrc`, the Gemfile `source`, `GOPROXY` for `go get`) and a
 `registries:` entry in `dependabot.yml` (`python-index`, `npm-registry`, `rubygems-server`,
 `goproxy-server`) that the update uses (`replaces-base: true` except for Go). Lockfiles are generated
-against it too. The registry must allow anonymous reads; no credentials are configured. Registry
+against it too. The `dependabot.yml` registry entry always authenticates with
+`username: ${{secrets.ARTIFACTORY_USERNAME}}` and `password: ${{secrets.ARTIFACTORY_PASSWORD}}`, so
+add both as organization **Dependabot** secrets (Settings → Secrets and variables → Dependabot)
+available to the generated repos. Lockfile generation in the rollout workflow still reads the
+registry anonymously. Registry
 download latency in the metrics report is broken down by host, so the custom registry shows up there.
 The advisory picker still reads versions from the public registry.
 

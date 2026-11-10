@@ -67,6 +67,11 @@ def registry_files(stack, registry):
 CODE_EXECUTION_ECOSYSTEMS = {"bundler", "mix", "pip"}
 
 
+# Dependabot secrets every custom registry authenticates with.
+REGISTRY_CREDENTIALS = ("    username: ${{secrets.ARTIFACTORY_USERNAME}}\n"
+                        "    password: ${{secrets.ARTIFACTORY_PASSWORD}}\n")
+
+
 def dependabot_yml(stack, registry=None):
     eco = STACKS[stack]["ecosystem"]
     code_exec = "    insecure-external-code-execution: allow\n" if eco in CODE_EXECUTION_ECOSYSTEMS else ""
@@ -75,7 +80,7 @@ def dependabot_yml(stack, registry=None):
         # goproxy-server has no replaces-base; Dependabot uses the configured proxy directly.
         base = "" if stack == "go" else "    replaces-base: true\n"
         registries = (f"registries:\n  {stack}:\n    type: {STACKS[stack]['registry_type']}\n"
-                      f'    url: "{registry}"\n{base}')
+                      f'    url: "{registry}"\n{REGISTRY_CREDENTIALS}{base}')
         use = f"    registries:\n      - {stack}\n"
     return (
         "version: 2\n"
