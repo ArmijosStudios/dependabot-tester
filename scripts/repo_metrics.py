@@ -90,10 +90,38 @@ def snapshot(repos, graphql=gh.graphql):
 
 
 def repo_settled(state):
-    alerts = state["alerts"]
-    return bool(alerts) and all(a.get("state") != "OPEN"
-                                or (a.get("dependabotUpdate") or {}).get("pullRequest")
-                                or (a.get("dependabotUpdate") or {}).get("error") for a in alerts)
+    return bool(state["alerts"]) and not waiting_alerts(state)
+
+
+def waiting_alerts(state):
+    """Open alerts whose security update has neither a PR nor an error yet."""
+    return [a for a in state["alerts"] if a.get("state") == "OPEN"
+            and not (a.get("dependabotUpdate") or {}).get("pullRequest")
+            and not (a.get("dependabotUpdate") or {}).get("error")]
+
+
+def progress(snap, elapsed, settle_left=None, final=None):
+    """Log line(s) for one poll: how many repos are settled and which are still pending, by reason."""
+    no_alert, no_update = [], []
+    for repo in sorted(snap, key=lambda r: repo_key(r.split("/")[-1])):
+        name, waiting = repo.split("/")[-1], waiting_alerts(snap[repo])
+        if not snap[repo]["alerts"]:
+            no_alert.append(name)
+        elif waiting:
+            numbers = ", ".join("#" + str(a["number"]) for a in waiting)
+            no_update.append(f"{name} ({numbers})")
+    n = len(no_alert) + len(no_update)
+    line = f"[{int(elapsed)}s] {len(snap) - n}/{len(snap)} repos have alert + security update outcome, {n} pending"
+    if final:
+        line += f"; {final}"
+    elif not n and settle_left is not None:
+        line += f"; reporting after {max(0, int(settle_left))}s more with no change"
+    lines = [line]
+    if no_alert:
+        lines.append(f"  no Dependabot alert yet ({len(no_alert)}): {', '.join(no_alert)}")
+    if no_update:
+        lines.append(f"  alert without a security update PR or error yet ({len(no_update)}): {', '.join(no_update)}")
+    return "\n".join(lines)
 
 
 def wait(repos, wait_timeout, settle, poll, graphql=gh.graphql, clock=time.monotonic, sleep=time.sleep):
@@ -106,13 +134,13 @@ def wait(repos, wait_timeout, settle, poll, graphql=gh.graphql, clock=time.monot
             last, last_change = snap, now
         done = sum(repo_settled(s) for s in snap.values())
         if done == len(repos) and now - last_change >= settle:
+            print(progress(snap, now - start, final="done"), file=sys.stderr, flush=True)
             return snap, "done"
         if now - start >= wait_timeout:
+            print(progress(snap, now - start, final="stopped waiting, reporting the pending repos as they are"),
+                  file=sys.stderr, flush=True)
             return snap, "timeout"
-        detail = ", ".join(f"{r.split('/')[-1]}: {len(s['alerts'])} alerts {len(s['prs'])} PRs"
-                           for r, s in list(snap.items())[:10])
-        print(f"[{int(now - start)}s] {done}/{len(repos)} repos have alert + security update outcome ({detail})",
-              file=sys.stderr, flush=True)
+        print(progress(snap, now - start, settle - (now - last_change)), file=sys.stderr, flush=True)
         sleep(poll)
 
 
@@ -344,9 +372,10 @@ def main():
     snap, state = wait(live, args.wait_timeout, args.settle, args.poll) if live else ({}, "done")
     budget = [args.max_logs]
     rows = []
-    for p in provs:
+    for i, p in enumerate(provs, 1):
         runs = []
         if not p.get("error"):
+            print(f"collecting Dependabot runs {i}/{len(provs)}: {p['repo']}", file=sys.stderr, flush=True)
             try:
                 runs = collect_runs(p["repo"], budget)
             except gh.GhError as e:

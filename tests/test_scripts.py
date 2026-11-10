@@ -411,6 +411,23 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(state, "done")
         self.assertEqual(snap["o/python-01"]["alerts"][0]["dependabotUpdate"]["pullRequest"]["number"], 2)
 
+    def test_progress_lists_pending_repos(self):
+        pr = {"number": 2, "url": "u", "createdAt": "2026-01-01T00:05:00Z"}
+        waiting = alert("2026-01-01T00:01:00Z", None)
+        waiting["number"] = 3
+        snap = {"o/python-10": {"alerts": []}, "o/python-2": {"alerts": []},
+                "o/python-01": {"alerts": [alert("2026-01-01T00:01:00Z", pr)]},
+                "o/node-01": {"alerts": [alert("2026-01-01T00:01:00Z", pr), waiting]}}
+        self.assertEqual(repo_metrics.progress(snap, 120).splitlines(), [
+            "[120s] 1/4 repos have alert + security update outcome, 3 pending",
+            "  no Dependabot alert yet (2): python-2, python-10",
+            "  alert without a security update PR or error yet (1): node-01 (#3)",
+        ])
+        done = {"o/python-01": snap["o/python-01"]}
+        self.assertEqual(repo_metrics.progress(done, 60, settle_left=120),
+                         "[60s] 1/1 repos have alert + security update outcome, 0 pending; "
+                         "reporting after 120s more with no change")
+
     def test_summarize_and_render(self):
         pr = {"number": 2, "url": "https://github.com/o/python-01/pull/2", "createdAt": "2026-01-01T00:05:00Z"}
         run = {"name": "pip in / for x - Update #1", "url": "u1", "kind": "security", "conclusion": "success",

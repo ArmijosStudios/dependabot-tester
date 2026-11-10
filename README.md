@@ -93,7 +93,8 @@ dispatches **Dependabot metrics**. Bad input gets an error comment and the issue
 `scripts/repo_metrics.py`. It polls the repos (batched GraphQL) until every repo has an alert whose
 security update has a PR or an error, then 3 more minutes with no change (gives up after 60
 minutes), reads each repo's Dependabot runs, jobs, logs and PRs, comments the report and closes
-the issue.
+the issue. Each poll logs how many repos are done and lists the ones still pending, by
+reason (no alert yet, or alert numbers with no security update PR or error yet).
 
 | Metric | Source |
 |---|---|
