@@ -47,8 +47,9 @@ body:
         GitHub advisory pinned to a vulnerable version that has a patched release, so Dependabot opens a
         security PR for it.
       placeholder: |
-        python=requests==2.19.1
+        python=pyyaml==5.3
         node=lodash@4.17.20
+        go=github.com/gin-gonic/gin@v1.5.0
     validations:
       required: false
   - type: textarea
