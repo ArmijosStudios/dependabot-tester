@@ -78,10 +78,13 @@ jobs:
           ORG: ${{ github.repository_owner }}
           ISSUE: ${{ github.event.issue.number }}
           ISSUE_URL: ${{ github.event.issue.html_url }}
+          JOBS: ${{ strategy.job-total }}
+          MAX_PARALLEL: ${{ strategy.max-parallel }}
         run: |
           mkdir -p out
           python3 scripts/provision.py "$STACK" "$COUNT" "$DEP" --org "$ORG" --issue "$ISSUE" \
-            --issue-url "$ISSUE_URL" --advisory "$ADVISORY" --registry "$REGISTRY" --report "out/$STACK.json"
+            --issue-url "$ISSUE_URL" --advisory "$ADVISORY" --registry "$REGISTRY" --report "out/$STACK.json" \
+            --stack-jobs "$(( JOBS < MAX_PARALLEL ? JOBS : MAX_PARALLEL ))"
       - if: always()
         uses: actions/upload-artifact@v5
         with:

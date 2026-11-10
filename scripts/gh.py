@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+import threading
 import time
 
 RETRY_MARKERS = ("secondary rate limit", "rate limit exceeded", "HTTP 502", "HTTP 503", "HTTP 504")
@@ -12,6 +13,30 @@ class GhError(Exception):
     pass
 
 
+# REST secondary limit: 900 points/min per token, 5 points per POST/PATCH/PUT/DELETE.
+_pace = {"interval": 0.0, "next": 0.0}
+_pace_lock = threading.Lock()
+
+
+def set_mutation_rate(per_minute):
+    """Space POST/PATCH/PUT/DELETE calls (across threads) to at most `per_minute`; 0 = unpaced."""
+    with _pace_lock:
+        _pace["interval"] = 60 / per_minute if per_minute else 0.0
+
+
+def _throttle(method, sleep):
+    if method in ("GET", "HEAD"):
+        return
+    with _pace_lock:
+        if not _pace["interval"]:
+            return
+        now = time.monotonic()
+        at = max(now, _pace["next"])
+        _pace["next"] = at + _pace["interval"]
+    if at > now:
+        sleep(at - now)
+
+
 def api(path, method="GET", body=None, raw=False, paginate=False, retries=5, wait=60, sleep=time.sleep):
     cmd = ["gh", "api", "-X", method, path]
     if paginate:
@@ -19,6 +44,7 @@ def api(path, method="GET", body=None, raw=False, paginate=False, retries=5, wai
     if body is not None:
         cmd += ["--input", "-"]
     for attempt in range(retries + 1):
+        _throttle(method, sleep)
         p = subprocess.run(cmd, input=json.dumps(body) if body is not None else None,
                            capture_output=True, text=True)
         if p.returncode == 0:
