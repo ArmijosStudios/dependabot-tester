@@ -27,7 +27,7 @@ This is the repo-per-package version of
 | Tech stacks | `[x] python` `[x] node` | Stacks to create repos for. |
 | Concurrency per stack | `python=10`<br>`node=5` | How many repos to create per stack (up to 200). Missing stacks default to the limit. |
 | Registry per stack (optional) | `python=https://pypi.example.com/simple`<br>`node=https://npm.example.com` | Registry URL per stack. Stacks left out use the public registry. See below. |
-| Dependency per stack (optional) | `python=requests==2.19.1`<br>`node=lodash@4.17.20` | `name@version` for all stacks; Python also accepts pip specifiers. Stacks left out get a vulnerable package (below). |
+| Dependency per stack (optional) | `python=pyyaml==5.3`<br>`node=lodash@4.17.20`<br>`go=github.com/gin-gonic/gin@v1.5.0` | `name@version` for all stacks; Python also accepts pip specifiers. Stacks left out get a vulnerable package (below). |
 
 Example: limit `10`, `python=3`, `node=20` creates `python-01..python-03` and `node-01..node-10`.
 Numbering continues after the highest existing repo of that stack, so a second rollout of
