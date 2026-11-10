@@ -58,7 +58,8 @@ body:
       description: |
         Optional `stack=URL` per line. The stack's repos resolve packages from that registry and
         Dependabot is configured to use it (`registries:` in `dependabot.yml`). Stacks left out use the
-        public registry. The registry must be reachable without credentials.
+        public registry. Dependabot authenticates with the `ARTIFACTORY_USERNAME` and
+        `ARTIFACTORY_PASSWORD` org Dependabot secrets.
       placeholder: |
         python=https://pypi.example.com/simple
         node=https://npm.example.com
