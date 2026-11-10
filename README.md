@@ -68,7 +68,8 @@ The advisory picker still reads versions from the public registry.
 The repo is private, is created with an initial README commit on `main`, gets topics
 `issue-repo-dependency-updater`, `<stack>` and `issue-<N>`, and `PUT /vulnerability-alerts`
 (Dependabot alerts + dependency graph) and `PUT /automated-security-fixes` (Dependabot security
-updates) are called before the manifest commit is pushed on top of `main` (and again after it).
+updates) are called before the manifest commit is pushed on top of `main` (and again after it only
+if that failed).
 
 When Dependabot picks up the push, a `Graph Update` run starts 5-15 s later, the alert follows about
 a minute after that and the security update PR a minute after that. When it misses the push (about
@@ -78,7 +79,8 @@ it), nothing happens until a periodic scan ~30 min later.
 Safety net: while the stack's repos are being created (not only after the last one), any repo with
 no Dependabot run 60 s after its push (`provision.py --nudge-after`, 0 turns it off) gets one commit
 that appends a comment to the package file (a `description` for `package.json`) and to
-`dependabot.yml`, which makes Dependabot re-read both. It is checked again 60 s after each nudge, up
+`dependabot.yml`, which makes Dependabot re-read both. The nudge is a git push, so it doesn't use
+the REST content-creation limit. It is checked again 60 s after each nudge, up
 to 3 nudges (`--nudge-attempts`). These repos are listed as **Nudged** in the rollout comment and
 marked `(nudged)` in the metrics; their times are still measured from the first push.
 
@@ -86,8 +88,17 @@ marked `(nudged)` in the metrics; their times are still measured from the first 
 
 **Repo dependency rollout** (`repo-rollout.yml`, on issue opened): `parse` reads the form →
 `provision` runs one matrix job per stack (`max-parallel` = limit) that creates that stack's repos
-one after another (`scripts/provision.py`) → `comment` posts the created repos on the issue and
+8 at a time (`scripts/provision.py --workers`) → `comment` posts the created repos on the issue and
 dispatches **Dependabot metrics**. Bad input gets an error comment and the issue stays open.
+
+Speed: each repo takes ~6 s of API calls and a git push, so the job runs `--workers` (8) repos at
+once and paces POST/PUT/PATCH/DELETE calls to 120 a minute for the token (GitHub's secondary limit is
+900 points a minute, 5 per mutating call; repo creation is also capped at 80 a minute), split evenly
+across the stack jobs running at once (`--stack-jobs`). One stack makes ~30 repos a minute (4
+mutating calls each), so `python=150` takes ~5 minutes plus up to ~4 minutes of nudging after the
+last push. The lockfile is generated once per stack and reused with the repo name swapped in.
+GitHub also caps content creation at about 500 requests an hour, so several hundred repos in one
+hour can still hit `secondary rate limit` retries (60 s each).
 
 **Dependabot metrics** (`dependabot-metrics.yml`) downloads the rollout's per-stack reports and runs
 `scripts/repo_metrics.py`. It polls the repos (batched GraphQL) until every repo has an alert whose

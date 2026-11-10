@@ -141,3 +141,22 @@ def lockfiles(stack, files, spec, timeout=300, registry=None):
             return {}
         return out
 
+
+
+def retarget_lockfiles(stack, locks, repo, org="example.com"):
+    """Reuse lockfiles generated for another repo of the same stack and dependency for `repo`.
+
+    Only the project's own name differs: `name` in `package-lock.json`, the `module` line of the
+    `go.mod` that `go get` rewrote. `Gemfile.lock` and `go.sum` don't name the project.
+    """
+    out = dict(locks)
+    if "package-lock.json" in out:
+        doc = json.loads(out["package-lock.json"])
+        doc["name"] = repo
+        if "" in doc.get("packages", {}):
+            doc["packages"][""]["name"] = repo
+        out["package-lock.json"] = json.dumps(doc, indent=2) + "\n"
+    if stack == "go" and "go.mod" in out:
+        out["go.mod"] = re.sub(r"^module .*$", f"module github.com/{org}/{repo}", out["go.mod"], count=1,
+                               flags=re.MULTILINE)
+    return out

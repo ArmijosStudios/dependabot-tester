@@ -153,10 +153,9 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual([c[:2] for c in calls], [
             ("POST", "orgs/Org/repos"), ("PUT", "repos/Org/python-01/topics"),
             ("PUT", "repos/Org/python-01/vulnerability-alerts"),
-            ("PUT", "repos/Org/python-01/automated-security-fixes"),
-            ("PUT", "repos/Org/python-01/vulnerability-alerts"),
             ("PUT", "repos/Org/python-01/automated-security-fixes")])
         self.assertNotIn("enable_before_push_error", r)
+        self.assertIn("dependabot_enabled_at", r)
         self.assertTrue(calls[0][2]["private"])
         self.assertTrue(calls[0][2]["auto_init"])
         self.assertEqual(calls[1][2]["names"], [stacks.TOPIC, "python", "issue-7"])
@@ -202,31 +201,27 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(doc, {"dependencies": {"a": "1"}, "description": f"rerun requested {stamp}"})
 
     def test_nudge_commit_touches_package_file_and_config(self):
-        import base64
-        calls = []
+        cmds, committed = [], {}
 
-        def fake_api(path, method="GET", body=None, **kw):
-            calls.append((method, path, body))
-            if path.endswith("git/ref/heads/main"):
-                return {"object": {"sha": "head"}}
-            if "/contents/" in path:
-                return {"content": base64.b64encode(b"x==1\n").decode()}
-            if path.endswith("git/commits/head"):
-                return {"tree": {"sha": "t0"}}
-            if path.endswith("git/trees"):
-                return {"sha": "t1"}
-            if path.endswith("git/commits"):
-                return {"sha": "c1"}
+        def fake_runner(root, token):
+            def git(*args):
+                cmds.append(args[0])
+                if args[0] == "reset":
+                    (root / ".github").mkdir()
+                    (root / "requirements.txt").write_text("x==1\n")
+                    (root / ".github/dependabot.yml").write_text("version: 2\n")
+                if args[0] == "commit":
+                    committed.update({p: (root / p).read_text() for p in ("requirements.txt", ".github/dependabot.yml")})
+                return "c1" if args[0] == "rev-parse" else ""
+            return git
 
-        with mock.patch.object(gh, "api", fake_api):
+        with mock.patch.object(provision, "git_runner", fake_runner), \
+                mock.patch.dict(provision.os.environ, {"GH_TOKEN": "t"}), \
+                mock.patch.object(gh, "api", side_effect=AssertionError("no REST calls")):
             self.assertEqual(provision.nudge_commit("Org", "python-01", "python", "S"), "c1")
-        tree = next(c[2] for c in calls if c[1].endswith("git/trees"))
-        self.assertEqual(tree["base_tree"], "t0")
-        self.assertEqual([e["path"] for e in tree["tree"]], ["requirements.txt", ".github/dependabot.yml"])
-        self.assertTrue(all(e["content"] == "x==1\n# rerun requested S\n" for e in tree["tree"]))
-        self.assertEqual(next(c[2] for c in calls if c[1].endswith("git/commits") and c[0] == "POST")["parents"],
-                         ["head"])
-        self.assertEqual(calls[-1][:3], ("PATCH", "repos/Org/python-01/git/refs/heads/main", {"sha": "c1"}))
+        self.assertEqual(cmds, ["init", "fetch", "reset", "commit", "push", "rev-parse"])
+        self.assertEqual(committed, {"requirements.txt": "x==1\n# rerun requested S\n",
+                                     ".github/dependabot.yml": "version: 2\n# rerun requested S\n"})
 
     def watch(self, runs, attempts=3):
         """Watch with a fake clock; `runs(name, nudges)` says whether the repo has a Dependabot run."""
@@ -284,10 +279,51 @@ class ProvisionTests(unittest.TestCase):
 
         w.poll = mock.Mock(side_effect=lambda f=w.poll: (order.append("poll"), f())[1])
         with mock.patch.object(provision, "provision_one", fake_provision):
-            provision.run("Org", "python", 3, "x==1", "7", "", existing=[], watch=w)
-        self.assertEqual(nudged, ["python-01", "python-02", "python-03"])
-        self.assertLess(order.index("python-01"), order.index("python-03"))
-        self.assertEqual(order[:6], ["python-01", "poll", "python-02", "poll", "python-03", "poll"])
+            provision.run("Org", "python", 3, "x==1", "7", "", existing=[], watch=w, workers=1)
+        self.assertEqual(sorted(nudged), ["python-01", "python-02", "python-03"])
+        self.assertLess(order.index("python-01"), order.index("poll"))
+
+    def test_run_creates_repos_in_parallel_and_reports_in_order(self):
+        import threading
+        import time
+        active, peak, lock = [0], [0], threading.Lock()
+
+        def fake_provision(org, stack, name, *a):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.05 if name == "python-01" else 0.01)
+            with lock:
+                active[0] -= 1
+            return self.pushed(name, "2026-01-01T00:00:00Z")
+
+        with mock.patch.object(provision, "provision_one", fake_provision):
+            r = provision.run("Org", "python", 6, "x==1", "7", "", existing=[], workers=3, poll_every=0.01)
+        self.assertEqual([x["name"] for x in r["repos"]], [f"python-0{i}" for i in range(1, 7)])
+        self.assertEqual(r["created"], 6)
+        self.assertGreater(peak[0], 1)
+        self.assertLessEqual(peak[0], 3)
+
+    def test_lockfile_generated_once_per_stack(self):
+        calls = []
+        lock = json.dumps({"name": "node-01", "lockfileVersion": 3,
+                           "packages": {"": {"name": "node-01"}, "node_modules/lodash": {"version": "4.17.20"}}})
+        with mock.patch.object(provision.manifests, "lockfiles",
+                               side_effect=lambda *a, **k: calls.append(1) or {"package-lock.json": lock}):
+            cache = provision.LockCache()
+            _, l1 = provision.build_files("node", "node-01", "lodash@4.17.20", "Org", "u", lock_cache=cache)
+            files, l2 = provision.build_files("node", "node-02", "lodash@4.17.20", "Org", "u", lock_cache=cache)
+        self.assertEqual(calls, [1])
+        self.assertEqual((l1, l2), ("package-lock.json", "package-lock.json"))
+        doc = json.loads(files["package-lock.json"])
+        self.assertEqual((doc["name"], doc["packages"][""]["name"]), ("node-02", "node-02"))
+        self.assertEqual(doc["packages"]["node_modules/lodash"], {"version": "4.17.20"})
+
+    def test_retarget_go_module(self):
+        locks = {"go.mod": "module github.com/Org/go-01\n\ngo 1.22\n\nrequire a v1\n", "go.sum": "a v1 h1:x\n"}
+        out = manifests.retarget_lockfiles("go", locks, "go-07", "Org")
+        self.assertEqual(out["go.mod"], "module github.com/Org/go-07\n\ngo 1.22\n\nrequire a v1\n")
+        self.assertEqual(out["go.sum"], locks["go.sum"])
 
     def test_provision_error_is_recorded(self):
         def fail(path, method="GET", body=None, **kw):
@@ -306,6 +342,18 @@ class GhTests(unittest.TestCase):
                    mock.Mock(returncode=0, stdout='{"ok": 1}', stderr="")]
         with mock.patch("subprocess.run", side_effect=results):
             self.assertEqual(gh.api("x", sleep=lambda s: None), {"ok": 1})
+
+    def test_mutations_are_paced(self):
+        slept = []
+        ok = mock.Mock(returncode=0, stdout="", stderr="")
+        gh.set_mutation_rate(60)
+        self.addCleanup(gh.set_mutation_rate, 0)
+        with mock.patch("subprocess.run", return_value=ok):
+            gh.api("a", "GET", sleep=slept.append)
+            gh.api("a", "PUT", sleep=slept.append)
+            gh.api("a", "PUT", sleep=slept.append)
+        self.assertEqual(len(slept), 1)
+        self.assertAlmostEqual(slept[0], 1, delta=0.1)
 
     def test_paginate_concatenated_pages(self):
         with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout='[{"a":1}]\n[{"a":2}]', stderr="")):
